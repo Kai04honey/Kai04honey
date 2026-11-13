@@ -25,8 +25,8 @@ const makeBloom = () => {
 const Inner: React.FC = () => {
   const f = useCurrentFrame();
   const { camera, scene } = useThree();
-  const world = useMemo(() => new ViceWorld(), []);
   const light = useMemo(lightOf, []);
+  const world = useMemo(() => new ViceWorld(light), [light]);
   const fx = useMemo(() => ({
     ink: new InkPass(scene, camera as THREE.PerspectiveCamera),
     lens: new LensBlur({ maxCoC: 24, nearScale: 1.2 }),
@@ -46,7 +46,7 @@ const Inner: React.FC = () => {
   const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd);
   const toid = new THREE.Vector3(1.35, 1.6, -0.95);
   fx.lens.focus = Math.max(0.3, toid.sub(cam.position).dot(fwd));
-  fx.lens.cInf = (getInputProps() as { cInf?: number }).cInf ?? 9;
+  fx.lens.cInf = (getInputProps() as { cInf?: number }).cInf ?? (close ? 9 : 4);
   gradeFor(fx.grade, light);
   return (
     <>

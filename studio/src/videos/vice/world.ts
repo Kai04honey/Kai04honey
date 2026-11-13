@@ -17,6 +17,32 @@ const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 const lam = (color: THREE.ColorRepresentation, map?: THREE.Texture) => twoTone(new THREE.MeshLambertMaterial({ color, map: map ?? null }));
 const box = (w: number, h: number, d: number) => { const g = new THREE.BoxGeometry(w, h, d); g.translate(0, h / 2, 0); return g; };
 
+// ---------------- reflections ----------------
+/** painted equirect environment (sky gradient, clouds, pastel skyline, warm ground) that glass, car paint and the
+ *  crystal ball reflect. One per light so sunset windows reflect a sunset. */
+let ENV: THREE.Texture;
+const envTex = (light: Light) => {
+  const t = ctex("vice-env-" + light, 2048, 1024, (g, r) => {
+    const sky = light === "day" ? ["#1f5fb8", "#3a8fdc", "#6fbbe8", "#a9dcef"] : ["#4a3a8a", "#c060a0", "#ff8f8a", "#ffd08a"];
+    const gr = g.createLinearGradient(0, 0, 0, 512);
+    sky.forEach((c, i) => gr.addColorStop([0, 0.45, 0.8, 1][i], c));
+    g.fillStyle = gr; g.fillRect(0, 0, 2048, 512);
+    g.fillStyle = light === "day" ? "rgba(255,255,255,0.95)" : "rgba(255,214,190,0.9)";
+    for (let i = 0; i < 14; i++) { const x = r() * 2048, y = 110 + r() * 150; g.beginPath(); g.ellipse(x, y, 60 + r() * 120, 14 + r() * 22, 0, 0, 7); g.fill(); }
+    // pastel skyline band just above the horizon (reflected hotels across the street)
+    const pal = light === "day" ? ["#ffb3c7", "#a8e6cf", "#ffd3a5", "#b8c8ff", "#f9f1d0"] : ["#d47a9a", "#8a9ec0", "#e8a070", "#9a88c8", "#e0b890"];
+    for (let x = 0; x < 2048;) { const w = 60 + r() * 140, h = 8 + r() * 26; g.fillStyle = pal[Math.floor(r() * pal.length)]; g.fillRect(x, 512 - h, w, h); x += w + 4; }
+    const gd = g.createLinearGradient(0, 512, 0, 1024);
+    gd.addColorStop(0, light === "day" ? "#e8cdbb" : "#c08a78"); gd.addColorStop(1, light === "day" ? "#6a6070" : "#3a2a48");
+    g.fillStyle = gd; g.fillRect(0, 512, 2048, 512);
+  });
+  t.mapping = THREE.EquirectangularReflectionMapping; t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+};
+/** two-tone shaded Phong with a sharp sun highlight and an environment reflection (glass, car paint, chrome) */
+const gloss = (color: THREE.ColorRepresentation, refl: number, shininess = 90, spec = 0.7, extra: THREE.MeshPhongMaterialParameters = {}) =>
+  twoTone(new THREE.MeshPhongMaterial({ color, envMap: ENV, reflectivity: refl, combine: THREE.MixOperation, shininess, specular: new THREE.Color(spec, spec, spec), ...extra }));
+
 // ---------------- painted textures ----------------
 const asphalt = () => ctex("vice-asphalt", 1024, 1024, (g, r) => {
   g.fillStyle = "#5d5a63"; g.fillRect(0, 0, 1024, 1024);
@@ -39,31 +65,19 @@ const bark = () => ctex("vice-bark", 256, 512, (g) => {
   g.fillStyle = "#b98a5a"; g.fillRect(0, 0, 256, 512);
   for (let y = 0; y < 512; y += 32) { g.fillStyle = "#8f6640"; g.fillRect(0, y, 256, 7); g.fillStyle = "#cfa274"; g.fillRect(0, y + 9, 256, 5); }
 });
-/** Art Deco facade: window bays with aqua glass, porthole band, door on the ground floor, painted shadows under ledges */
-const decoFacade = (key: string, wall: string, trim: string, floors: number, bays: number) => ctex("vice-fac-" + key, 1024, 1024, (g, r) => {
-  g.fillStyle = wall; g.fillRect(0, 0, 1024, 1024);
-  const fh = 1024 / floors, bw = 1024 / bays;
+/** Art Deco facade wall: stucco, fine scoring lines, a door on the ground floor, soft shadows under the ledges.
+ *  Windows and shopfront glass are real geometry (reflective glass + trim) placed by hotel(). */
+const decoFacade = (key: string, wall: string, trim: string, floors: number) => ctex("vice-fac-" + key, 2048, 2048, (g, r) => {
+  g.fillStyle = wall; g.fillRect(0, 0, 2048, 2048);
+  for (let i = 0; i < 9000; i++) { g.fillStyle = r() < 0.5 ? "rgba(255,255,255,0.10)" : "rgba(90,60,90,0.06)"; g.fillRect(r() * 2048, r() * 2048, 2 + r() * 4, 2 + r() * 4); }
+  const fh = 2048 / floors;
   for (let f = 0; f < floors; f++) {
     const y0 = f * fh;
-    if (f === floors - 1) { // ground floor: glass shopfront + door
-      g.fillStyle = "#3d8fa6"; g.fillRect(40, y0 + fh * 0.22, 1024 - 80, fh * 0.62);
-      g.fillStyle = "rgba(255,255,255,0.35)"; for (let k = 0; k < 6; k++) g.fillRect(70 + k * 160, y0 + fh * 0.26, 18, fh * 0.5);
-      g.fillStyle = trim; g.fillRect(452, y0 + fh * 0.2, 120, fh * 0.8);
-      g.fillStyle = "#2b5f78"; g.fillRect(466, y0 + fh * 0.3, 92, fh * 0.7);
-      continue;
-    }
-    for (let b = 0; b < bays; b++) {
-      const x0 = b * bw + bw * 0.2, w = bw * 0.6, y = y0 + fh * 0.22, h = fh * 0.5;
-      g.fillStyle = "rgba(60,40,60,0.22)"; g.fillRect(x0 - 6, y - 6, w + 12, h + 12);
-      g.fillStyle = r() < 0.15 ? "#f7e7b6" : "#4fb3c8"; g.fillRect(x0, y, w, h);
-      g.fillStyle = "rgba(255,255,255,0.45)"; g.fillRect(x0 + w * 0.12, y + h * 0.1, w * 0.12, h * 0.75);
-      g.strokeStyle = trim; g.lineWidth = 8; g.strokeRect(x0, y, w, h);
-      g.beginPath(); g.moveTo(x0 + w / 2, y); g.lineTo(x0 + w / 2, y + h); g.stroke();
-    }
-    // soft shadow under the eyebrow ledge
-    const grd = g.createLinearGradient(0, y0 + fh * 0.12, 0, y0 + fh * 0.3);
-    grd.addColorStop(0, "rgba(70,40,80,0.28)"); grd.addColorStop(1, "rgba(70,40,80,0)");
-    g.fillStyle = grd; g.fillRect(0, y0 + fh * 0.12, 1024, fh * 0.2);
+    g.fillStyle = "rgba(80,50,80,0.10)"; g.fillRect(0, y0 + fh * 0.97, 2048, 6);
+    if (f === floors - 1) { g.fillStyle = trim; g.fillRect(904, y0 + fh * 0.18, 240, fh * 0.82); g.fillStyle = "#2b4f68"; g.fillRect(932, y0 + fh * 0.28, 184, fh * 0.72); }
+    const grd = g.createLinearGradient(0, y0 + fh * 0.12, 0, y0 + fh * 0.32);
+    grd.addColorStop(0, "rgba(70,40,80,0.30)"); grd.addColorStop(1, "rgba(70,40,80,0)");
+    g.fillStyle = grd; g.fillRect(0, y0 + fh * 0.12, 2048, fh * 0.2);
   }
 });
 const stripes = (key: string, a: string, b: string, n = 12) => ctex("vice-stripe-" + key, 512, 64, (g) => {
@@ -124,7 +138,7 @@ const palm = (h: number, lean: THREE.Vector3, seed: number) => {
 /** stepped Art Deco hotel: main block, eyebrow ledges, rounded corner tower, central fin with a neon sign */
 const hotel = (z0: number, width: number, floors: number, wall: string, trim: string, sign: string | null, neon: string, seed: number) => {
   const g = new THREE.Group(), fh = 3.1, h = floors * fh, depth = 14, x0 = 4.5;
-  const fac = decoFacade(seed + wall, wall, trim, floors, Math.max(3, Math.round(width / 3)));
+  const fac = decoFacade(seed + wall, wall, trim, floors), bays = Math.max(3, Math.round(width / 3));
   const wallM = lam("#ffffff", fac), plain = lam(wall), trimM = lam(trim);
   // facade box: map the painted facade onto the street face (-x) only
   const mats = [plain, wallM, plain, plain, plain, plain]; // +x, -x, +y, -y, +z, -z
@@ -135,6 +149,31 @@ const hotel = (z0: number, width: number, floors: number, wall: string, trim: st
     const e = new THREE.Mesh(box(0.7, 0.14, width + 0.2), trimM);
     e.position.set(x0 - 0.3, h - f * fh + fh * 0.88 - fh, z0 - width / 2); e.castShadow = e.receiveShadow = true; g.add(e);
   }
+  // windows: reflective glass panes with trim frames and a centre mullion (instanced), ink-outlined by the world pass
+  const bw = width / bays, ww = bw * 0.58, wh = fh * 0.5;
+  const panes: THREE.Matrix4[] = [], frames: THREE.Matrix4[] = [];
+  const M = (x: number, y: number, z: number, sx: number, sy: number, sz: number) => new THREE.Matrix4().compose(V(x, y, z), new THREE.Quaternion(), V(sx, sy, sz));
+  for (let i = 1; i < floors; i++) for (let b = 0; b < bays; b++) {
+    const zc = z0 - (b + 0.5) * bw, yc = i * fh + fh * 0.53;
+    panes.push(M(x0 - 0.03, yc, zc, 1, wh, ww));
+    for (const s2 of [-1, 1]) frames.push(M(x0 - 0.06, yc + s2 * (wh / 2 + 0.05), zc, 0.12, 0.1, ww + 0.2)); // sill + head
+    for (const s2 of [-1, 0, 1]) frames.push(M(x0 - 0.06, yc, zc + s2 * (ww / 2 + (s2 ? 0.05 : 0)), 0.12, wh, s2 ? 0.1 : 0.06)); // jambs + mullion
+  }
+  // ground floor shopfront: two big panes either side of the door
+  for (const s2 of [-1, 1]) {
+    const pw = width / 2 - 1.1, zc = z0 - width / 2 + s2 * (0.85 + pw / 2);
+    panes.push(M(x0 - 0.03, fh * 0.5, zc, 1, fh * 0.56, pw));
+    frames.push(M(x0 - 0.07, fh * 0.2, zc, 0.14, 0.12, pw + 0.2), M(x0 - 0.07, fh * 0.79, zc, 0.14, 0.12, pw + 0.2));
+  }
+  const paneGeo = new THREE.PlaneGeometry(1, 1); paneGeo.rotateY(-Math.PI / 2);
+  const streak = ctex("vice-glass", 256, 256, (c) => {
+    c.fillStyle = "#c4c4c4"; c.fillRect(0, 0, 256, 256);
+    c.fillStyle = "#ffffff"; c.save(); c.translate(128, 128); c.rotate(-0.6);
+    c.fillRect(-90, -200, 34, 400); c.fillRect(-36, -200, 12, 400); c.restore();
+  });
+  const glassM = gloss(seed % 2 ? "#3a9cc4" : "#3aa6b4", 0.4, 140, 0.9, { map: streak });
+  const pm = new THREE.InstancedMesh(paneGeo, glassM, panes.length); panes.forEach((m, i) => pm.setMatrixAt(i, m)); pm.receiveShadow = true; g.add(pm);
+  const fm = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), trimM, frames.length); frames.forEach((m, i) => fm.setMatrixAt(i, m)); fm.castShadow = fm.receiveShadow = true; g.add(fm);
   // parapet + stepped crown
   const par = new THREE.Mesh(box(depth * 0.9, 0.9, width * 0.96), trimM);
   par.position.set(x0 + depth / 2, h, z0 - width / 2); par.castShadow = true; g.add(par);
@@ -168,7 +207,7 @@ const hotel = (z0: number, width: number, floors: number, wall: string, trim: st
 };
 
 const car = (color: string) => {
-  const g = new THREE.Group(), bodyM = lam(color), dark = lam("#2b2433"), chrome = lam("#d9dde6"), glass = lam("#6fc3d6");
+  const g = new THREE.Group(), bodyM = gloss(color, 0.28, 70, 0.8), dark = lam("#2b2433"), chrome = gloss("#cfd6e2", 0.85, 160, 1.0), glass = gloss("#3a8fae", 0.7, 150, 1.0);
   const b = new THREE.Mesh(box(1.9, 0.62, 4.6), bodyM); b.position.y = 0.32; g.add(b);
   const cab = new THREE.Mesh(box(1.7, 0.5, 2.0), glass); cab.position.set(0, 0.94, -0.2); g.add(cab);
   const roof = new THREE.Mesh(box(1.74, 0.08, 2.1), bodyM); roof.position.set(0, 1.42, -0.2); g.add(roof);
@@ -233,7 +272,8 @@ export class ViceWorld {
   cards: THREE.Mesh[] = [];
   ball: THREE.Mesh;
 
-  constructor() {
+  constructor(light: Light) {
+    ENV = envTex(light);
     const R = this.root;
     // ---- sky ----
     this.skyMat = new THREE.ShaderMaterial({
@@ -311,8 +351,17 @@ export class ViceWorld {
     const cloth = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.72, 0.78, 32), lam("#7a3fb0")); cloth.position.y = 0.39; T.add(cloth);
     const top = new THREE.Mesh(new THREE.CylinderGeometry(0.66, 0.66, 0.05, 32), lam("#e8c45a")); top.position.y = 0.8; T.add(top);
     const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.1, 16), lam("#e8c45a")); stand.position.y = 0.87; T.add(stand);
-    this.ball = new THREE.Mesh(new THREE.SphereGeometry(0.17, 32, 24), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.1, 2.0, 2.6) }));
-    this.ball.position.y = 1.08; T.add(this.ball);
+    const swirl = ctex("vice-swirl", 512, 256, (g) => {
+      const gr = g.createLinearGradient(0, 0, 0, 256);
+      gr.addColorStop(0, "#7a3cff"); gr.addColorStop(0.5, "#3fe0ff"); gr.addColorStop(1, "#ff5fd2");
+      g.fillStyle = gr; g.fillRect(0, 0, 512, 256);
+      g.strokeStyle = "rgba(255,255,255,0.85)"; g.lineWidth = 10; g.lineCap = "round";
+      for (let k = 0; k < 5; k++) { g.beginPath(); for (let x = 0; x <= 512; x += 8) g.lineTo(x, 40 + k * 45 + 22 * Math.sin(x / 40 + k * 1.7)); g.stroke(); }
+    });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.115, 32, 24), new THREE.MeshBasicMaterial({ map: swirl, color: new THREE.Color(1.5, 1.5, 1.7) }));
+    core.position.y = 1.08; core.rotation.set(0.4, 0.6, 0.2); T.add(core);
+    this.ball = new THREE.Mesh(new THREE.SphereGeometry(0.17, 48, 32), gloss("#bfe9ff", 0.75, 220, 1.4, { transparent: true, opacity: 0.38 }));
+    this.ball.position.y = 1.08; this.ball.renderOrder = 2; T.add(this.ball);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.5, 8), lam("#f4f1ea")); pole.position.set(0.25, 1.25, 0.25); T.add(pole);
     const umb = new THREE.Mesh(new THREE.ConeGeometry(1.5, 0.55, 16, 1, true), lam("#ffffff", stripes("umb", "#ff5fa2", "#fff6ea", 16)));
     (umb.material as THREE.Material).side = THREE.DoubleSide; umb.position.set(0.25, 2.62, 0.25); T.add(umb);
@@ -321,7 +370,7 @@ export class ViceWorld {
     const legs = new THREE.Mesh(box(0.06, 0.62, 0.06), lam("#2a1838")); legs.position.set(-0.75, 0, 0.5); T.add(legs);
     const stars = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.3), new THREE.MeshBasicMaterial({ map: signTex("toid", "TOID SEES ALL", "#ffd23f", "#2a1838", 1024, 340, "900 84px Arial Black, Arial, sans-serif"), color: new THREE.Color(1.15, 1.15, 1.15) }));
     stars.position.set(0, 0.55, 0.735); T.add(stars);
-    T.traverse((o) => { if ((o as THREE.Mesh).isMesh && o !== this.ball) { o.castShadow = true; o.receiveShadow = true; } });
+    T.traverse((o) => { if ((o as THREE.Mesh).isMesh && o !== this.ball && o !== core) { o.castShadow = true; o.receiveShadow = true; } });
 
     // ---- cast: lit flat cards (cardShade) on the NOINK layer + contact blobs ----
     const toidDraw = (p: Pen) => { bodyFront(p, TOID, { mode: "stand", expr: "smile", facing: -1, seed: 4, wave: 0.6, look: -0.4 }); turban(p); };
@@ -354,11 +403,11 @@ export class ViceWorld {
     cam.layers.enable(NOINK);
     // sun relative to the camera's horizontal forward axis (az: 0 ahead, +90 screen right)
     const fw = look.clone().sub(pos).setY(0).normalize(), rt = fw.clone().cross(V(0, 1, 0)).normalize();
-    const az = THREE.MathUtils.degToRad(light === "day" ? 110 : -25), el = THREE.MathUtils.degToRad(light === "day" ? 52 : 9);
+    const az = THREE.MathUtils.degToRad(light === "day" ? -98 : -62), el = THREE.MathUtils.degToRad(light === "day" ? 27 : 11);
     const sunDir = fw.clone().multiplyScalar(Math.cos(az)).addScaledVector(rt, Math.sin(az)).multiplyScalar(Math.cos(el)).add(V(0, Math.sin(el), 0)).normalize();
     this.hemi.color.set(L.sky); this.hemi.groundColor.set(L.ground); this.hemi.intensity = L.hemiI;
     this.sun.color.set(L.sunCol); this.sun.intensity = L.sunI;
-    const Rr = 30;
+    const Rr = 42;
     this.sun.position.copy(look).addScaledVector(sunDir, 220); this.sun.target.position.copy(look);
     const sc = this.sun.shadow.camera;
     sc.left = -Rr; sc.right = Rr; sc.top = Rr; sc.bottom = -Rr; sc.near = 20; sc.far = 480; sc.updateProjectionMatrix();
